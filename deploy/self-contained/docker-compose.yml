@@ -1,0 +1,218 @@
+version: '3.9'
+
+services:
+  db:
+    image: ghcr.io/watts-ai/posthog-postgres:${IMAGE_TAG:-latest}
+    restart: on-failure
+    environment:
+      POSTGRES_USER: posthog
+      POSTGRES_DB: posthog
+      POSTGRES_PASSWORD: posthog
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U posthog']
+      interval: 5s
+      timeout: 30s
+      retries: 5
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6.2.7-alpine
+    restart: on-failure
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  clickhouse:
+    image: ghcr.io/watts-ai/posthog-clickhouse:${IMAGE_TAG:-latest}
+    restart: on-failure
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: 1
+      KAFKA_HOSTS: 'kafka:9092'
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8123/ping']
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      - kafka
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  kafka:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+    restart: on-failure
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://kafka:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://kafka:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr kafka:33145
+      - --advertise-rpc-addr kafka:33145
+      - --mode dev-container
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --overprovisioned
+      - --set redpanda.empty_seed_starts_cluster=false
+      - --seeds kafka:33145
+      - --set redpanda.auto_create_topics_enabled=true
+    volumes:
+      - kafka-data:/var/lib/redpanda/data
+    healthcheck:
+      test: curl -f http://localhost:9644/v1/status/ready || exit 1
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  web:
+    image: ghcr.io/watts-ai/posthog:${IMAGE_TAG:-latest}
+    command: /compose/start
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/_health"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    environment:
+      DATABASE_URL: postgres://posthog:posthog@db:5432/posthog
+      CLICKHOUSE_HOST: clickhouse
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_URL: kafka:9092
+      SECRET_KEY: ${SECRET_KEY:-unsafe-secret-key}
+      SITE_URL: ${SITE_URL:-http://localhost:8000}
+      IS_BEHIND_PROXY: 'true'
+      DISABLE_SECURE_SSL_REDIRECT: 'true'
+      OBJECT_STORAGE_ENABLED: 'false'
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    ports:
+      - "8000:8000"
+
+  worker:
+    image: ghcr.io/watts-ai/posthog:${IMAGE_TAG:-latest}
+    command: /compose/temporal-django-worker
+    restart: on-failure
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://posthog:posthog@db:5432/posthog
+      CLICKHOUSE_HOST: clickhouse
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_URL: kafka:9092
+      SECRET_KEY: ${SECRET_KEY:-unsafe-secret-key}
+      SITE_URL: ${SITE_URL:-http://localhost:8000}
+      IS_BEHIND_PROXY: 'true'
+      DISABLE_SECURE_SSL_REDIRECT: 'true'
+      OBJECT_STORAGE_ENABLED: 'false'
+      SENTRY_DSN: ${SENTRY_DSN:-}
+
+  plugins:
+    image: ghcr.io/watts-ai/posthog:${IMAGE_TAG:-latest}
+    command: /compose/start-plugins
+    restart: on-failure
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://posthog:posthog@db:5432/posthog
+      CLICKHOUSE_HOST: clickhouse
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_URL: kafka:9092
+      SECRET_KEY: ${SECRET_KEY:-unsafe-secret-key}
+      SITE_URL: ${SITE_URL:-http://localhost:8000}
+      IS_BEHIND_PROXY: 'true'
+      DISABLE_SECURE_SSL_REDIRECT: 'true'
+      OBJECT_STORAGE_ENABLED: 'false'
+      PLUGINS_INGESTION_BUFFER_TTL: 0
+      SENTRY_DSN: ${SENTRY_DSN:-}
+
+  temporal:
+    image: ghcr.io/watts-ai/posthog-temporal:${IMAGE_TAG:-latest}
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      DB_USER: posthog
+      DB_PASSWORD: posthog
+      DB_DBNAME: temporal
+      POSTGRES_SEEDS: db
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+
+  capture:
+    image: ghcr.io/watts-ai/posthog-capture:${IMAGE_TAG:-latest}
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      KAFKA_HOSTS: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgres://posthog:posthog@db:5432/posthog
+      LOG_LEVEL: debug
+    ports:
+      - "3000:3000"
+
+  feature-flags:
+    image: ghcr.io/watts-ai/posthog-feature-flags:${IMAGE_TAG:-latest}
+    restart: on-failure
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://posthog:posthog@db:5432/posthog
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_HOSTS: kafka:9092
+    ports:
+      - "3001:3001"
+
+volumes:
+  db-data:
+  clickhouse-data:
+  redis-data:
+  kafka-data:

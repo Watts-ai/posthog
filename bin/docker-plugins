@@ -1,0 +1,2 @@
+#!/bin/bash
+exec ./bin/plugin-server --no-restart-loop

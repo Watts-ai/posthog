@@ -71,3 +71,4 @@ rust/target
 !docker-compose.base.yml
 !docker-compose.dev.yml
 !docker
+!deploy

@@ -1,6 +1,17 @@
+> [!NOTE]
+> **This is a fork of PostHog maintained by [Watts AI](https://watts.ai).**
+>
+> It includes a simplified, self-contained Docker deployment that doesn't require complex volume mounts or external configuration files.
+> Check out [`deploy/self-contained/SELF-CONTAINED.md`](deploy/self-contained/SELF-CONTAINED.md) for deployment instructions.
+>
+> Everything below this line is copied verbatim from the upstream PostHog repository.
+
+---
+
 <p align="center">
   <img alt="posthoglogo" src="https://user-images.githubusercontent.com/65415371/205059737-c8a4f836-4889-4654-902e-f302b187b6a0.png">
 </p>
+
 <p align="center">
   <a href='https://posthog.com/contributors'><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/posthog/posthog"/></a>
   <a href='http://makeapullrequest.com'><img alt='PRs Welcome' src='https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=shields'/></a>

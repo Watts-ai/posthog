@@ -1,0 +1,3 @@
+#!/bin/bash
+/compose/wait
+/code/bin/docker-plugins
